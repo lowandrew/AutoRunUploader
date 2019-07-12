@@ -33,7 +33,7 @@ def wait_for_run_completion(run_folder):
 
 
 def upload_files_and_start_run(run_folder, email_address, password):
-    x = os.path.split(run_folder)[1]
+    x = os.path.split(run_folder)[1].split('_')
     run_name = x[0] + '_' + x[1]
     metadata_files = ['CompletedJobInfo.xml', 'GenerateFASTQRunStatistics.xml', 'RunInfo.xml', 'runParameters.xml',
                       'SampleSheet.csv']
@@ -69,7 +69,8 @@ def upload_files_and_start_run(run_folder, email_address, password):
         with open(interop_file, 'rb') as data:
             response = requests.put(API_ENDPOINT + 'upload/{}/{}'.format(run_name, os.path.split(interop_file)[1]),
                                     data=data,
-                                    auth=(email_address, password))
+                                    auth=(email_address, password),
+                                    verify=False)
             if response.status_code == 204:
                 print('{}: Successfully uploaded {}'.format(datetime.datetime.now(), interop_file))
             else:
@@ -89,7 +90,8 @@ def upload_files_and_start_run(run_folder, email_address, password):
 
     # Now start the run actually going
     requests.get(API_ENDPOINT + 'run_cowbat/{}'.format(run_name),
-                 auth=(email_address, password))
+                 auth=(email_address, password),
+                 verify=False)
 
 
 @Gooey
