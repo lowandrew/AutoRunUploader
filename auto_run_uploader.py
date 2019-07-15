@@ -3,11 +3,15 @@
 from gooey import Gooey, GooeyParser
 import datetime
 import requests
+import urllib3
 import time
 import glob
 import os
 
 API_ENDPOINT = 'https://olc.cloud.inspection.gc.ca/api/'
+
+# SSL cert isn't quite right on portal. Use this to disable warning.
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 def check_credentials(email, password):
@@ -41,57 +45,85 @@ def upload_files_and_start_run(run_folder, email_address, password):
     interop_files = sorted(glob.glob(os.path.join(run_folder, 'InterOp', '*.bin')))
     sequence_files = sorted(glob.glob(os.path.join(run_folder, 'Data', 'Intensities', 'BaseCalls', '*.fastq.gz')))
 
+    all_uploaded_successfully = True
+
     # Upload metadata files.
     for metadata_file in metadata_files:
-        with open(os.path.join(run_folder, metadata_file), 'rb') as data:
-            response = requests.put(API_ENDPOINT + 'upload/{}/{}'.format(run_name, metadata_file),
+        # Check if file already exists, don't want to bother re-uploading if it does.
+        response = requests.get(API_ENDPOINT + 'upload/{}/{}'.format(run_name, metadata_file),
+                                auth=(email_address, password),
+                                verify=False)
+        response_dict = response.json()
+        if response_dict['exists'] is False or response_dict['size'] == 0:
+            with open(os.path.join(run_folder, metadata_file), 'rb') as data:
+                response = requests.put(API_ENDPOINT + 'upload/{}/{}'.format(run_name, metadata_file),
+                                        data=data,
+                                        auth=(email_address, password),
+                                        verify=False)
+                if response.status_code == 204:
+                    print('{}: Successfully uploaded {}'.format(datetime.datetime.now(), metadata_file))
+                else:
+                    all_uploaded_successfully = False
+
+    # Upload config.xml
+    response = requests.get(API_ENDPOINT + 'upload/{}/{}'.format(run_name, os.path.split(config_xml)[1]),
+                            auth=(email_address, password),
+                            verify=False)
+    response_dict = response.json()
+    if response_dict['exists'] is False or response_dict['size'] == 0:
+        with open(config_xml, 'rb') as data:
+            response = requests.put(API_ENDPOINT + 'upload/{}/{}'.format(run_name, os.path.split(config_xml)[1]),
                                     data=data,
                                     auth=(email_address, password),
                                     verify=False)
             if response.status_code == 204:
-                print('{}: Successfully uploaded {}'.format(datetime.datetime.now(), metadata_file))
+                print('{}: Successfully uploaded config.xml'.format(datetime.datetime.now()))
             else:
-                return False
-
-    # Upload config.xml
-    with open(config_xml, 'rb') as data:
-        response = requests.put(API_ENDPOINT + 'upload/{}/{}'.format(run_name, os.path.split(config_xml)[1]),
-                                data=data,
-                                auth=(email_address, password),
-                                verify=False)
-        if response.status_code == 204:
-            print('{}: Successfully uploaded config.xml'.format(datetime.datetime.now()))
-        else:
-            return False
+                all_uploaded_successfully = False
 
     # InterOp files
     for interop_file in interop_files:
-        with open(interop_file, 'rb') as data:
-            response = requests.put(API_ENDPOINT + 'upload/{}/{}'.format(run_name, os.path.split(interop_file)[1]),
-                                    data=data,
-                                    auth=(email_address, password),
-                                    verify=False)
-            if response.status_code == 204:
-                print('{}: Successfully uploaded {}'.format(datetime.datetime.now(), interop_file))
-            else:
-                return False
+        response = requests.get(API_ENDPOINT + 'upload/{}/{}'.format(run_name, os.path.split(interop_file)[1]),
+                                auth=(email_address, password),
+                                verify=False)
+        response_dict = response.json()
+        if response_dict['exists'] is False or response_dict['size'] == 0:
+            with open(interop_file, 'rb') as data:
+                response = requests.put(API_ENDPOINT + 'upload/{}/{}'.format(run_name, os.path.split(interop_file)[1]),
+                                        data=data,
+                                        auth=(email_address, password),
+                                        verify=False)
+                if response.status_code == 204:
+                    print('{}: Successfully uploaded {}'.format(datetime.datetime.now(), interop_file))
+                else:
+                    all_uploaded_successfully = False
 
     # Sequence files.
     for sequence_file in sequence_files:
-        with open(sequence_file, 'rb') as data:
-            response = requests.put(API_ENDPOINT + 'upload/{}/{}'.format(run_name, os.path.split(sequence_file)[1]),
-                                    data=data,
-                                    auth=(email_address, password),
-                                    verify=False)
-            if response.status_code == 204:
-                print('{}: Successfully uploaded {}'.format(datetime.datetime.now(), sequence_file))
-            else:
-                return False
+        response = requests.get(API_ENDPOINT + 'upload/{}/{}'.format(run_name, os.path.split(sequence_file)[1]),
+                                auth=(email_address, password),
+                                verify=False)
+        response_dict = response.json()
+        if response_dict['exists'] is False or response_dict['size'] == 0:
+            with open(sequence_file, 'rb') as data:
+                response = requests.put(API_ENDPOINT + 'upload/{}/{}'.format(run_name, os.path.split(sequence_file)[1]),
+                                        data=data,
+                                        auth=(email_address, password),
+                                        verify=False)
+                if response.status_code == 204:
+                    print('{}: Successfully uploaded {}'.format(datetime.datetime.now(), sequence_file))
+                else:
+                    all_uploaded_successfully = False
 
-    # Now start the run actually going
-    requests.get(API_ENDPOINT + 'run_cowbat/{}'.format(run_name),
-                 auth=(email_address, password),
-                 verify=False)
+    if all_uploaded_successfully:
+        # Now start the run actually going
+        requests.get(API_ENDPOINT + 'run_cowbat/{}'.format(run_name),
+                     auth=(email_address, password),
+                     verify=False)
+        return True
+    else:
+        return False
+
 
 
 @Gooey
@@ -106,8 +138,15 @@ def main():
     # Will kick user out if credentials are wrong. Should get this somewhat more elegant in the future.
     check_credentials(args.email_address, args.password)
     wait_for_run_completion(args.run_folder)
-    upload_files_and_start_run(args.run_folder, args.email_address, args.password)
-    print('Complete!')
+    attempted_uploads = 0
+    successful_upload = False
+    while attempted_uploads < 5 and successful_upload is False:
+        successful_upload = upload_files_and_start_run(args.run_folder, args.email_address, args.password)
+        attempted_uploads += 1
+    if successful_upload:
+        print('Complete!')
+    else:
+        print('Something went wrong uploading files. You\'ll have to upload them manually.')
 
 
 if __name__ == '__main__':
