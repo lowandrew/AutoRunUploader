@@ -125,28 +125,59 @@ def upload_files_and_start_run(run_folder, email_address, password):
         return False
 
 
+def upload_run(run_folder, email_address, password):
+    wait_for_run_completion(run_folder)
+    attempted_uploads = 0
+    successful_upload = False
+    while attempted_uploads < 5 and successful_upload is False:
+        successful_upload = upload_files_and_start_run(run_folder, email_address, password)
+        attempted_uploads += 1
+    if successful_upload:
+        print('Complete!')
+    else:
+        print('Something went wrong uploading files. You\'ll have to upload them manually.')
+
+
+def check_run_exists_in_portal(run_folder, email, password):
+    x = os.path.split(run_folder)[1].split('_')
+    run_name = x[0] + '_' + x[1]
+    response = requests.get(API_ENDPOINT + 'run_cowbat/{}'.format(run_name),
+                            auth=(email, password),
+                            verify=False)
+    if response.status_code == 404:
+        return False
+    elif 'status' in response.json():
+        if 'Did not start' in response.json()['status']:
+            return True
+        else:
+            return False
+    else:
+        return True
+
 
 @Gooey
 def main():
-    parser = GooeyParser(description='Watches a MiSeq run for completion and automatically uploads output to '
+    parser = GooeyParser(description='Watches a MiSeq for new runs, and automatically uploads any new runs to '
                                      'the CFIA FoodPort for assembly.')
-    parser.add_argument('run_folder', widget='DirChooser', help='MiSeq run directory.')
+    parser.add_argument('miseq_folder', widget='DirChooser', help='MiSeqAnalysis directory.')
     parser.add_argument('email_address', help='Email you used to sign up for FoodPort.')
     parser.add_argument('password', widget='PasswordField', help='Your password for FoodPort.')
     args = parser.parse_args()
 
     # Will kick user out if credentials are wrong. Should get this somewhat more elegant in the future.
     check_credentials(args.email_address, args.password)
-    wait_for_run_completion(args.run_folder)
-    attempted_uploads = 0
-    successful_upload = False
-    while attempted_uploads < 5 and successful_upload is False:
-        successful_upload = upload_files_and_start_run(args.run_folder, args.email_address, args.password)
-        attempted_uploads += 1
-    if successful_upload:
-        print('Complete!')
-    else:
-        print('Something went wrong uploading files. You\'ll have to upload them manually.')
+
+    while True:
+        print('Checking for runs that haven\'t been uploaded.')
+        run_folders = [x[0] for x in os.walk(args.miseq_folder)]
+        if args.miseq_folder in run_folders:
+            run_folders.remove(args.miseq_folder)
+        for run_folder in run_folders:
+            run_exists = check_run_exists_in_portal(run_folder, args.email_address, args.password)
+            if run_exists is False:
+                print('Found new run to upload! Starting upload of {}'.format(run_folder))
+                upload_run(run_folder, args.email_address, args.password)
+        time.sleep(1800)
 
 
 if __name__ == '__main__':
